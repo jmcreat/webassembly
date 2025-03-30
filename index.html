@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>WebGL + WebAssembly Graphics Sample</title>
+  <style>
+    canvas { width: 100%; height: 100%; display: block; }
+    body { margin: 0; }
+  </style>
+</head>
+<body>
+  <canvas id="glCanvas"></canvas>
+  <script>
+    let wasmInstance;
+
+    // WASM 모듈 로드 함수
+    async function loadWasm() {
+      const response = await fetch('triangle.wasm');
+      const bytes = await response.arrayBuffer();
+      const results = await WebAssembly.instantiate(bytes);
+      wasmInstance = results.instance;
+    }
+
+    // WebGL 초기화 및 셰이더, 버퍼 설정
+    function initWebGL() {
+      const canvas = document.getElementById('glCanvas');
+      const gl = canvas.getContext('webgl');
+      if (!gl) {
+        alert("WebGL을 지원하지 않는 브라우저입니다.");
+        return;
+      }
+
+      // --- 셰이더 소스 ---
+      // 버텍스 셰이더: a_position 속성에 WASM에서 계산한 u_offset을 더합니다.
+      const vsSource = `
+        attribute vec2 a_position;
+        uniform float u_offset;
+        void main() {
+          gl_Position = vec4(a_position.x + u_offset, a_position.y, 0.0, 1.0);
+        }
+      `;
+
+      // 프래그먼트 셰이더: 단색(Color)을 출력합니다.
+      const fsSource = `
+        void main() {
+          gl_FragColor = vec4(0.2, 0.8, 0.4, 1.0);
+        }
+      `;
+
+      // 셰이더 컴파일 함수
+      function compileShader(source, type) {
+        const shader = gl.createShader(type);
+        gl.shaderSource(shader, source);
+        gl.compileShader(shader);
+        if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+          console.error('셰이더 컴파일 에러:', gl.getShaderInfoLog(shader));
+          gl.deleteShader(shader);
+          return null;
+        }
+        return shader;
+      }
+
+      const vertexShader = compileShader(vsSource, gl.VERTEX_SHADER);
+      const fragmentShader = compileShader(fsSource, gl.FRAGMENT_SHADER);
+
+      // 프로그램 생성 및 링크
+      const shaderProgram = gl.createProgram();
+      gl.attachShader(shaderProgram, vertexShader);
+      gl.attachShader(shaderProgram, fragmentShader);
+      gl.linkProgram(shaderProgram);
+      if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+        console.error('프로그램 링크 에러:', gl.getProgramInfoLog(shaderProgram));
+        return null;
+      }
+      gl.useProgram(shaderProgram);
+
+      // 속성과 uniform 위치 조회
+      const positionAttributeLocation = gl.getAttribLocation(shaderProgram, 'a_position');
+      const offsetUniformLocation = gl.getUniformLocation(shaderProgram, 'u_offset');
+
+      // 삼각형 버텍스 데이터
+      const positionBuffer = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+      const positions = [
+         0.0,  0.5,
+        -0.5, -0.5,
+         0.5, -0.5,
+      ];
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.STATIC_DRAW);
+
+      // 속성 활성화 및 버텍스 데이터 연결
+      gl.enableVertexAttribArray(positionAttributeLocation);
+      gl.vertexAttribPointer(positionAttributeLocation, 2, gl.FLOAT, false, 0, 0);
+
+      // 애니메이션 루프
+      function render(time) {
+        // 시간(time)은 ms 단위이며, WASM 함수에 넘길 float 값으로 사용
+        const offset = wasmInstance.exports.computeOffset(time);
+        // 화면 범위 내에서 반복적으로 이동하도록 모듈로 연산 적용
+        gl.uniform1f(offsetUniformLocation, offset % 1.0);
+
+        // 캔버스 크기 설정
+        gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+        // 캔버스 초기화
+        gl.clearColor(0.0, 0.0, 0.0, 1.0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+
+        // 삼각형 그리기
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+        requestAnimationFrame(render);
+      }
+      requestAnimationFrame(render);
+    }
+
+    // 캔버스를 창 크기에 맞게 조정
+    function resizeCanvas() {
+      const canvas = document.getElementById('glCanvas');
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    // WASM 모듈 로드 후 WebGL 초기화 실행
+    loadWasm().then(initWebGL);
+  </script>
+</body>
+</html>
+
